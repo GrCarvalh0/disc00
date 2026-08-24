@@ -1,4 +1,19 @@
 (function () {
+  // STUN ajuda dois navegadores a se descobrirem, mas quando a conexão
+  // direta não é possível (NAT/roteador restritivo, comum em redes
+  // domésticas e de operadora), é preciso um servidor TURN para
+  // retransmitir o tráfego. Sem isso, a chamada nunca fecha entre
+  // pessoas em redes diferentes — por isso ela funcionava só localmente.
+  var ICE_CONFIG = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+    ]
+  };
+
   var myPeer = null;
   var myId = null;
   var myName = '';
@@ -230,7 +245,7 @@
       joinError = 'Não foi possível entrar na sala. Confira o código com quem criou a sala e tente de novo.';
       view = 'lobby';
       render();
-    }, 8000);
+    }, 14000);
 
     conn.on('open', function () {
       opened = true;
@@ -280,14 +295,14 @@
   // em vez de ficar travado esperando um evento que pode nunca chegar.
   function claimHostOrJoin() {
     var settled = false;
-    var attempt = new Peer(hostId);
+    var attempt = new Peer(hostId, { config: ICE_CONFIG });
 
     var timeoutId = setTimeout(function () {
       if (settled) return;
       settled = true;
       try { attempt.destroy(); } catch (e) {}
       joinAsMember();
-    }, 6000);
+    }, 7000);
 
     attempt.on('open', function (id) {
       if (settled) return;
@@ -312,7 +327,7 @@
     joinStatus = 'Entrando na sala...';
     if (view === 'connecting') render();
     var settled = false;
-    var attempt = new Peer();
+    var attempt = new Peer({ config: ICE_CONFIG });
 
     var timeoutId = setTimeout(function () {
       if (settled) return;
@@ -321,7 +336,7 @@
       joinError = 'Não foi possível conectar. Verifique sua internet e tente de novo.';
       view = 'lobby';
       render();
-    }, 8000);
+    }, 10000);
 
     attempt.on('open', function (id) {
       if (settled) return;
