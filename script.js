@@ -187,6 +187,7 @@
 
   function becomeHost() {
     role = 'host';
+    joinStatus = '';
     roster = {};
     roster[myId] = myName;
 
@@ -198,9 +199,10 @@
         if (msg.type === 'hello') {
           roster[conn.peer] = msg.name;
           dataConns[conn.peer] = conn;
+          ensureMediaConnection(conn.peer);
           conn.send({ type: 'roster', roster: roster });
           broadcastRoster();
-          applyRoster(roster);
+          renderRoomView();
         }
       });
       conn.on('close', function () {
@@ -219,11 +221,23 @@
     role = 'member';
     var conn = myPeer.connect(hostId, { reliable: true });
     dataConns[hostId] = conn;
+    var opened = false;
+
+    var openTimeout = setTimeout(function () {
+      if (opened) return;
+      try { conn.close(); } catch (e) {}
+      try { myPeer.destroy(); } catch (e) {}
+      joinError = 'Não foi possível entrar na sala. Confira o código com quem criou a sala e tente de novo.';
+      view = 'lobby';
+      render();
+    }, 8000);
 
     conn.on('open', function () {
+      opened = true;
+      clearTimeout(openTimeout);
       conn.send({ type: 'hello', name: myName });
-      view = 'room';
       joinStatus = '';
+      view = 'room';
       renderRoomView();
     });
 
@@ -232,6 +246,7 @@
     });
 
     conn.on('close', function () {
+      if (!opened) return;
       joinStatus = 'Perdemos a conexão com a sala. Tentando reabrir...';
       renderRoomView();
       Object.keys(roster).forEach(function (id) { if (id !== myId) cleanupPeer(id); });
@@ -239,27 +254,14 @@
     });
 
     conn.on('error', function () {
-      setTimeout(attemptTakeoverOrRejoin, 800);
+      if (opened) { setTimeout(attemptTakeoverOrRejoin, 800); }
     });
   }
 
   function attemptTakeoverOrRejoin() {
     if (view !== 'room') return;
     try { myPeer.destroy(); } catch (e) {}
-    myPeer = new Peer(hostId);
-    myPeer.on('open', function (id) {
-      myId = id;
-      setupPeerCommonHandlers();
-      becomeHost();
-    });
-    myPeer.on('error', function () {
-      myPeer = new Peer();
-      myPeer.on('open', function (id) {
-        myId = id;
-        setupPeerCommonHandlers();
-        becomeMember();
-      });
-    });
+    claimHostOrJoin();
   }
 
   function loadPeerJS() {
@@ -269,6 +271,75 @@
       script.src = 'https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js';
       script.onload = resolve;
       document.head.appendChild(script);
+    });
+  }
+
+  // Tenta virar o "host" da sala (dono do ID fixo derivado do código).
+  // Se o ID já estiver em uso, OU se não conseguirmos confirmação em
+  // poucos segundos por qualquer motivo, caímos para o fluxo de membro
+  // em vez de ficar travado esperando um evento que pode nunca chegar.
+  function claimHostOrJoin() {
+    var settled = false;
+    var attempt = new Peer(hostId);
+
+    var timeoutId = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      try { attempt.destroy(); } catch (e) {}
+      joinAsMember();
+    }, 6000);
+
+    attempt.on('open', function (id) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      myPeer = attempt;
+      myId = id;
+      setupPeerCommonHandlers();
+      becomeHost();
+    });
+
+    attempt.on('error', function () {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      try { attempt.destroy(); } catch (e) {}
+      joinAsMember();
+    });
+  }
+
+  function joinAsMember() {
+    joinStatus = 'Entrando na sala...';
+    if (view === 'connecting') render();
+    var settled = false;
+    var attempt = new Peer();
+
+    var timeoutId = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      try { attempt.destroy(); } catch (e) {}
+      joinError = 'Não foi possível conectar. Verifique sua internet e tente de novo.';
+      view = 'lobby';
+      render();
+    }, 8000);
+
+    attempt.on('open', function (id) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      myPeer = attempt;
+      myId = id;
+      setupPeerCommonHandlers();
+      becomeMember();
+    });
+
+    attempt.on('error', function (err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      joinError = 'Erro ao conectar (' + (err && err.type ? err.type : 'desconhecido') + '). Tente de novo.';
+      view = 'lobby';
+      render();
     });
   }
 
@@ -291,27 +362,11 @@
     myName = name.trim();
     roomCode = cleanCode;
     hostId = 'sala-' + roomCode;
-    joinStatus = 'Conectando...';
+    joinStatus = 'Conectando à sala...';
     view = 'connecting';
     render();
 
-    myPeer = new Peer(hostId);
-
-    myPeer.on('open', function (id) {
-      myId = id;
-      setupPeerCommonHandlers();
-      becomeHost();
-    });
-
-    myPeer.on('error', function (err) {
-      if (String(err.type) !== 'unavailable-id') return;
-      myPeer = new Peer();
-      myPeer.on('open', function (id) {
-        myId = id;
-        setupPeerCommonHandlers();
-        becomeMember();
-      });
-    });
+    claimHostOrJoin();
   }
 
   // ---------- media controls ----------
